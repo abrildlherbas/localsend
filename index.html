@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LocalSend Desktop</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <header><div class="logo">⇄</div><div><h1>LocalSend</h1><p>Compartí archivos en tu red local</p></div><span class="pill" id="connection">Iniciando…</span></header>
+  <main>
+    <section class="hero"><div class="eyebrow">ESCRITORIO · RECEPTOR</div><h2>Tu computadora está lista</h2><p>Dejá esta ventana abierta. Los dispositivos conectados a la misma Wi‑Fi podrán encontrarte automáticamente.</p>
+      <div class="network"><div><small>Dirección IP</small><strong id="ip">Buscando…</strong></div><div><small>Puerto WebSocket</small><strong>8080</strong></div><div><small>Puerto UDP</small><strong>53317</strong></div></div>
+    </section>
+    <section class="panel"><div class="section-head"><div><h3>Transferencias entrantes</h3><p>Las solicitudes aparecerán acá.</p></div><span class="count" id="count">0</span></div><div id="requests" class="empty"><div class="empty-icon">⇩</div><b>Esperando dispositivos…</b><span>Cuando un teléfono te encuentre, aparecerá su solicitud.</span></div></section>
+    <section class="panel"><div class="section-head"><div><h3>Actividad</h3><p>Estado de la aplicación</p></div></div><div id="activity" class="activity">Iniciando servicios de red…</div></section>
+  </main>
+  <footer>LocalSend · Transferencias dentro de la red local</footer>
+</div>
+<script src="renderer.js"></script>
+</body></html>
