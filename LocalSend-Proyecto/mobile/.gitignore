@@ -5,3 +5,7 @@ node_modules/
 npm-debug.log
 yarn-error.log
 package-lock.json
+android/app/build/
+ios/Pods/
+*.log
+.DS_Store
