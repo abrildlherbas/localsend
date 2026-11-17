@@ -1,123 +1,162 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { SafeAreaView, View, Text, TouchableOpacity, StyleSheet, FlatList, Alert, ActivityIndicator, Platform } from 'react-native';
+
+import React, { useState } from 'react';
+import {
+  SafeAreaView, View, Text, TextInput, TouchableOpacity,
+  StyleSheet, Alert, ActivityIndicator
+} from 'react-native';
+
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import dgram from 'react-native-udp';
 
-const UDP_PORT = 53317;
 const CHUNK = 64 * 1024;
 
 export default function App() {
-  const [devices, setDevices] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const [ip, setIp] = useState('');
   const [file, setFile] = useState(null);
-  const [status, setStatus] = useState('Buscando computadoras en tu Wi‑Fi…');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
-  const socket = useRef(null);
-  const ws = useRef(null);
-  const alive = useRef(true);
-
-  useEffect(() => {
-    alive.current = true;
-    try {
-      socket.current = dgram.createSocket('udp4');
-      socket.current.bind(0);
-      socket.current.on('message', msg => {
-        try {
-          const item = JSON.parse(msg.toString());
-          if (item.type === 'DISCOVER' && item.host && item.port) {
-            setDevices(old => old.some(x => x.host === item.host) ? old : [...old, item]);
-          }
-        } catch {}
-      });
-      const broadcast = () => {
-        if (!socket.current) return;
-        const payload = Buffer.from(JSON.stringify({ type: 'MOBILE_SEARCH' }));
-        socket.current.send(payload, 0, payload.length, UDP_PORT, '255.255.255.255', err => {
-          if (err) setStatus(`No se pudo buscar: ${err.message}`);
-        });
-      };
-      broadcast();
-      const interval = setInterval(broadcast, 2000);
-      return () => {
-        alive.current = false;
-        clearInterval(interval);
-        try { socket.current?.close(); } catch {}
-        try { ws.current?.close(); } catch {}
-      };
-    } catch (e) {
-      setStatus(`Error de red: ${e.message}. Revisá los permisos y el build nativo.`);
-    }
-  }, []);
+  const [status, setStatus] = useState('Ingresá la IP de tu computadora');
 
   async function chooseFile() {
-    const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false });
-    if (!result.canceled && result.assets?.[0]) setFile(result.assets[0]);
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      multiple: false
+    });
+
+    if (!result.canceled) {
+      setFile(result.assets[0]);
+      setStatus('Archivo seleccionado');
+    }
   }
 
-  function waitMessage(websocket) {
+  function waitMessage(ws) {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Tiempo de espera agotado')), 30000);
+      const timer = setTimeout(() => {
+        reject(new Error('Tiempo de espera agotado'));
+      }, 30000);
+
       const handler = event => {
-        let data;
-        try { data = JSON.parse(event.data); } catch { return; }
-        if (['ACCEPT','REJECT','DONE','ERROR'].includes(data.type)) {
-          clearTimeout(timer); websocket.removeEventListener('message', handler);
-          data.type === 'ERROR' ? reject(new Error(data.message)) : resolve(data);
+        let msg;
+        try {
+          msg = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+
+        if (['ACCEPT', 'REJECT', 'DONE', 'ERROR'].includes(msg.type)) {
+          clearTimeout(timer);
+          ws.removeEventListener('message', handler);
+
+          if (msg.type === 'ERROR') reject(new Error(msg.message));
+          else resolve(msg);
         }
       };
-      websocket.addEventListener('message', handler);
+
+      ws.addEventListener('message', handler);
     });
   }
 
   async function sendFile() {
-    if (!selected || !file || busy) return;
-    setBusy(true); setProgress(0); setStatus('Conectando con la computadora…');
+    if (!ip.trim() || !file || busy) {
+      Alert.alert('Atención', 'Ingresá la IP y seleccioná un archivo.');
+      return;
+    }
+
+    setBusy(true);
+    setProgress(0);
+
+    let ws;
+
     try {
-      const connection = new WebSocket(`ws://${selected.host}:${selected.port}`);
-      ws.current = connection;
-      await new Promise((resolve,reject) => {
-        const timer=setTimeout(()=>reject(new Error('No se pudo conectar a la PC')),10000);
-        connection.onopen=()=>{clearTimeout(timer);resolve()};
-        connection.onerror=()=>{clearTimeout(timer);reject(new Error('Error de conexión. Revisá el firewall de la PC.'))};
+      setStatus('Conectando con la computadora...');
+
+      ws = new WebSocket(`ws://${ip.trim()}:8080`);
+
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('No se pudo conectar con la PC')),
+          10000
+        );
+
+        ws.onopen = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+
+        ws.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error('Error de conexión. Revisá la IP y el firewall.'));
+        };
       });
-      connection.send(JSON.stringify({ type:'FILE_OFFER', name:file.name, size:file.size || 0, mimeType:file.mimeType || 'application/octet-stream', from:'Android' }));
-      setStatus('Esperando que acepten el archivo…');
-      const decision = await waitMessage(connection);
-      if (decision.type !== 'ACCEPT') throw new Error('La computadora rechazó el archivo.');
-      setStatus('Enviando archivo…');
-      const info = await FileSystem.getInfoAsync(file.uri, { size: true });
+
+      ws.send(JSON.stringify({
+        type: 'FILE_OFFER',
+        name: file.name,
+        size: file.size || 0,
+        mimeType: file.mimeType || 'application/octet-stream',
+        from: 'Android'
+      }));
+
+      setStatus('Esperando confirmación en la PC...');
+
+      const response = await waitMessage(ws);
+
+      if (response.type !== 'ACCEPT') {
+        throw new Error('La computadora rechazó el archivo.');
+      }
+
+      const info = await FileSystem.getInfoAsync(file.uri);
       const total = info.size || file.size || 0;
+
+      if (!total) throw new Error('No se pudo determinar el tamaño del archivo.');
+
       let offset = 0;
+
       while (offset < total) {
         const length = Math.min(CHUNK, total - offset);
+
         const base64 = await FileSystem.readAsStringAsync(file.uri, {
-          encoding: 'base64', position: offset, length
+          encoding: 'base64',
+          position: offset,
+          length
         });
+
         const binary = globalThis.atob(base64);
         const bytes = new Uint8Array(binary.length);
-        for (let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
-        await new Promise((resolve,reject) => {
-          if (connection.readyState !== WebSocket.OPEN) return reject(new Error('Se perdió la conexión.'));
-          connection.send(bytes.buffer);
-          // WebSocket conserva el orden de los mensajes; pequeña pausa para no saturar memoria.
-          setTimeout(resolve, 8);
+
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+
+        await new Promise((resolve, reject) => {
+          if (ws.readyState !== WebSocket.OPEN) {
+            reject(new Error('Se perdió la conexión.'));
+            return;
+          }
+
+          ws.send(bytes.buffer);
+          setTimeout(resolve, 10);
         });
+
         offset += length;
-        setProgress(Math.min(100, Math.round(offset / Math.max(1,total) * 100)));
+        setProgress(Math.round(offset / total * 100));
       }
-      connection.send(JSON.stringify({ type:'FILE_END' }));
-      const done = await waitMessage(connection);
-      if (done.type === 'DONE') {
-        setProgress(100); setStatus('¡Archivo enviado correctamente!');
-        Alert.alert('Transferencia completada', `${file.name} se envió a ${selected.name}.`);
+
+      ws.send(JSON.stringify({ type: 'FILE_END' }));
+
+      const finished = await waitMessage(ws);
+
+      if (finished.type === 'DONE') {
+        setProgress(100);
+        setStatus('¡Transferencia completada!');
+        Alert.alert('¡Listo!', 'El archivo llegó correctamente a la PC.');
       }
-      connection.close();
-    } catch (e) {
-      setStatus(e.message);
-      Alert.alert('No se pudo enviar', e.message);
+
+    } catch (error) {
+      setStatus(error.message);
+      Alert.alert('Error', error.message);
     } finally {
+      ws?.close();
       setBusy(false);
     }
   }
@@ -125,29 +164,99 @@ export default function App() {
   return (
     <SafeAreaView style={s.safe}>
       <View style={s.container}>
-        <View style={s.header}><View style={s.logo}><Text style={s.logoText}>⇄</Text></View><View><Text style={s.title}>LocalSend</Text><Text style={s.subtitle}>Compartí sin cables</Text></View></View>
-        <View style={s.hero}><Text style={s.kicker}>TU RED LOCAL</Text><Text style={s.heroTitle}>Enviar archivos</Text><Text style={s.description}>Elegí un archivo y seleccioná la computadora que lo va a recibir.</Text></View>
-        <TouchableOpacity style={s.pick} onPress={chooseFile} disabled={busy}><Text style={s.pickIcon}>＋</Text><View style={{flex:1}}><Text style={s.pickTitle}>{file ? file.name : 'Seleccionar un archivo'}</Text><Text style={s.pickSub}>{file ? `${Math.round((file.size||0)/1024)} KB · Listo para enviar` : 'Fotos, videos y documentos'}</Text></View><Text style={s.chevron}>›</Text></TouchableOpacity>
-        <View style={s.sectionHead}><Text style={s.sectionTitle}>Computadoras disponibles</Text><TouchableOpacity onPress={()=>{setDevices([]);setStatus('Buscando computadoras…')}}><Text style={s.refresh}>Actualizar</Text></TouchableOpacity></View>
-        {devices.length===0 ? <View style={s.empty}><ActivityIndicator color="#69d9c1"/><Text style={s.emptyText}>{status}</Text><Text style={s.hint}>Asegurate de que la PC esté abierta y en la misma Wi‑Fi.</Text></View> :
-          <FlatList data={devices} keyExtractor={item=>item.host} renderItem={({item})=><TouchableOpacity style={[s.device,selected?.host===item.host&&s.deviceSelected]} onPress={()=>setSelected(item)}><Text style={s.computer}>▣</Text><View style={{flex:1}}><Text style={s.deviceName}>{item.name}</Text><Text style={s.deviceIp}>{item.host}</Text></View><Text style={s.radio}>{selected?.host===item.host?'●':'○'}</Text></TouchableOpacity>} />}
-        {selected && <TouchableOpacity disabled={!file||busy} style={[s.send,(!file||busy)&&s.disabled]} onPress={sendFile}><Text style={s.sendText}>{busy?'Enviando…':'Enviar archivo'}</Text></TouchableOpacity>}
-        {busy && <View style={s.progressWrap}><View style={s.progressTrack}><View style={[s.progressBar,{width:`${progress}%`}]} /></View><Text style={s.progressText}>{progress}% · {status}</Text></View>}
-        {!busy && <Text style={s.status}>{status}</Text>}
-        <Text style={s.footer}>Los dispositivos deben estar conectados a la misma red Wi‑Fi.</Text>
+        <Text style={s.title}>⇄ LocalSend</Text>
+        <Text style={s.subtitle}>Compartí archivos por Wi-Fi</Text>
+
+        <View style={s.card}>
+          <Text style={s.heading}>Computadora de destino</Text>
+
+          <TextInput
+            style={s.input}
+            placeholder="Ejemplo: 192.168.1.15"
+            placeholderTextColor="#8491aa"
+            value={ip}
+            onChangeText={setIp}
+            keyboardType="decimal-pad"
+            editable={!busy}
+          />
+
+          <Text style={s.hint}>
+            Encontrá la IP en la ventana de LocalSend Desktop.
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          style={s.pick}
+          onPress={chooseFile}
+          disabled={busy}
+        >
+          <Text style={s.pickTitle}>＋ Seleccionar archivo</Text>
+          <Text style={s.hint}>
+            {file ? file.name : 'Fotos, videos y documentos'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[s.send, (!file || !ip.trim() || busy) && s.disabled]}
+          onPress={sendFile}
+          disabled={!file || !ip.trim() || busy}
+        >
+          <Text style={s.sendText}>
+            {busy ? 'Enviando...' : 'Enviar archivo'}
+          </Text>
+        </TouchableOpacity>
+
+        {busy && (
+          <View style={s.progressTrack}>
+            <View style={[s.progressBar, { width: `${progress}%` }]} />
+          </View>
+        )}
+
+        {busy && <Text style={s.hint}>{progress}%</Text>}
+
+        <Text style={s.status}>{status}</Text>
+        <Text style={s.footer}>
+          Ambos dispositivos deben estar conectados a la misma Wi-Fi.
+        </Text>
       </View>
     </SafeAreaView>
   );
 }
 
-const s=StyleSheet.create({
- safe:{flex:1,backgroundColor:'#0b1020'},container:{flex:1,padding:22,paddingTop:30},
- header:{flexDirection:'row',alignItems:'center',gap:13,marginBottom:28},logo:{width:48,height:48,borderRadius:15,backgroundColor:'#596fff',alignItems:'center',justifyContent:'center'},logoText:{fontSize:30,color:'white',fontWeight:'800'},title:{fontSize:21,fontWeight:'800',color:'#f2f5ff'},subtitle:{color:'#91a0bd',fontSize:12,marginTop:2},
- hero:{backgroundColor:'#172441',borderWidth:1,borderColor:'#293a60',borderRadius:22,padding:22,marginBottom:18},kicker:{color:'#67d9c1',fontSize:10,fontWeight:'800',letterSpacing:2},heroTitle:{color:'white',fontSize:27,fontWeight:'800',marginTop:10},description:{color:'#a7b5d0',fontSize:13,lineHeight:20,marginTop:7},
- pick:{backgroundColor:'#151f35',borderWidth:1,borderColor:'#2b3a59',borderRadius:16,padding:16,flexDirection:'row',alignItems:'center',gap:13},pickIcon:{fontSize:28,color:'#68d9c1'},pickTitle:{color:'#edf2ff',fontWeight:'700',fontSize:14},pickSub:{color:'#8e9db9',fontSize:11,marginTop:4},chevron:{fontSize:25,color:'#8493b3'},
- sectionHead:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginTop:28,marginBottom:12},sectionTitle:{color:'#edf2ff',fontSize:16,fontWeight:'800'},refresh:{color:'#6ddbc4',fontSize:12,fontWeight:'700'},
- empty:{alignItems:'center',justifyContent:'center',padding:25,backgroundColor:'#121b2e',borderRadius:16,gap:10},emptyText:{color:'#dce5fa',fontSize:13,textAlign:'center'},hint:{color:'#8796b2',fontSize:11,textAlign:'center'},
- device:{flexDirection:'row',alignItems:'center',gap:13,padding:15,backgroundColor:'#151f35',borderRadius:15,borderWidth:1,borderColor:'#283753',marginBottom:9},deviceSelected:{borderColor:'#65d8c1',backgroundColor:'#172c37'},computer:{fontSize:25,color:'#72d9c4'},deviceName:{color:'#edf2ff',fontWeight:'700'},deviceIp:{color:'#91a0bd',fontSize:11,marginTop:3},radio:{color:'#67d9c1',fontSize:20},
- send:{backgroundColor:'#64d9c0',padding:16,borderRadius:14,alignItems:'center',marginTop:16},disabled:{opacity:.4},sendText:{color:'#09221e',fontWeight:'900',fontSize:15},
- progressWrap:{marginTop:16},progressTrack:{height:7,backgroundColor:'#273550',borderRadius:8,overflow:'hidden'},progressBar:{height:7,backgroundColor:'#64d9c0'},progressText:{color:'#a9b7d2',fontSize:11,marginTop:8},status:{color:'#a9b7d2',fontSize:11,marginTop:14,textAlign:'center'},footer:{color:'#65738f',fontSize:10,textAlign:'center',marginTop:'auto',paddingTop:18}
+const s = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: '#0b1020' },
+  container: { flex: 1, padding: 25, justifyContent: 'center' },
+  title: { color: 'white', fontSize: 32, fontWeight: '900' },
+  subtitle: { color: '#91a0bd', marginBottom: 35 },
+  card: {
+    backgroundColor: '#172441', padding: 20,
+    borderRadius: 17, marginBottom: 15
+  },
+  heading: { color: 'white', fontWeight: 'bold', marginBottom: 12 },
+  input: {
+    backgroundColor: '#0b1020', color: 'white',
+    padding: 14, borderRadius: 10
+  },
+  hint: { color: '#91a0bd', fontSize: 12, marginTop: 9 },
+  pick: {
+    backgroundColor: '#172441', padding: 20,
+    borderRadius: 15, marginBottom: 15
+  },
+  pickTitle: { color: '#69d9c1', fontWeight: 'bold', fontSize: 16 },
+  send: {
+    backgroundColor: '#69d9c1', padding: 17,
+    borderRadius: 13, alignItems: 'center'
+  },
+  disabled: { opacity: 0.4 },
+  sendText: { color: '#09221e', fontWeight: '900' },
+  progressTrack: {
+    height: 8, backgroundColor: '#293753',
+    borderRadius: 8, marginTop: 20, overflow: 'hidden'
+  },
+  progressBar: { height: 8, backgroundColor: '#69d9c1' },
+  status: { color: 'white', textAlign: 'center', marginTop: 20 },
+  footer: {
+    color: '#71809e', fontSize: 11,
+    textAlign: 'center', marginTop: 35
+  }
 });

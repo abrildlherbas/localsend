@@ -7,8 +7,24 @@
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.localsend.mobile",
-      "permissions": ["INTERNET", "ACCESS_NETWORK_STATE", "ACCESS_WIFI_STATE", "CHANGE_WIFI_MULTICAST_STATE"]
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "ACCESS_WIFI_STATE",
+        "CHANGE_WIFI_MULTICAST_STATE"
+      ]
     },
-    "plugins": ["expo-document-picker"]
+    "plugins": [
+      "expo-document-picker",
+      "expo-status-bar"
+    ],
+    "ios": {
+      "bundleIdentifier": "com.localsend.mobile"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "2b70c5c3-64ab-4dec-a8ee-a1516c82cb6a"
+      }
+    }
   }
 }
