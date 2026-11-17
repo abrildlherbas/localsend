@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "LocalSend",
+    "slug": "localsend-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "com.localsend.mobile",
+      "permissions": ["INTERNET", "ACCESS_NETWORK_STATE", "ACCESS_WIFI_STATE", "CHANGE_WIFI_MULTICAST_STATE"]
+    },
+    "plugins": ["expo-document-picker"]
+  }
+}
